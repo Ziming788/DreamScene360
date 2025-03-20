@@ -1,0 +1,1 @@
+nohup python train.py -s data/ocean2 -m output/ocean2 --self_refinement --api_key  --num_prompt 2 --max_rounds 2 > training.log 2>&1 &

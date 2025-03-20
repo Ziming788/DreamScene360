@@ -31,7 +31,7 @@ def load_img(image_path):
     }
     return img_dict
 
-def llm_request(transcript=None, temp=0.):
+# def llm_request(transcript=None, temp=0.):
     max_tokens = 512
     wait_time = 10
 
@@ -40,14 +40,16 @@ def llm_request(transcript=None, temp=0.):
         "Authorization": f"Bearer {api_key}"
     }
     data = {
-        'model': 'gpt-4-vision-preview',
-        'max_tokens':max_tokens, 
-        'temperature': temp,
-        'top_p': 0.5,
-        'messages':[]
+    'model': 'gpt-4o',
+    'max_tokens': max_tokens,
+    'temperature': temp,
+    'top_p': 0.5,
+    'messages': [
+        {"role": "user", "content": ""}
+    ]
     }
     if transcript is not None:
-        data['messages'] = transcript
+        data['messages'].append({"role": "user", "content": transcript})
 
     response_text, retry, response_json = '', 0, None
     while len(response_text)<2:
@@ -71,16 +73,72 @@ def llm_request(transcript=None, temp=0.):
         response_text = response_json["choices"][0]["message"]["content"]
     return response_json["choices"][0]["message"]["content"]
 
+def llm_request(transcript=None, temp=0.):
+    max_tokens = 512
+    wait_time = 10
+
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}"
+    }
+
+    data = {
+        'model': 'gpt-4o',
+        'max_tokens': max_tokens,
+        'temperature': temp,
+        'top_p': 0.5,
+        'messages': []
+    }
+
+    if transcript:
+        for item in transcript:
+            formatted_content = []
+            for content_item in item['content']:
+                # Ensure each content item has a type
+                if isinstance(content_item, str):
+                    formatted_content.append({"type": "text", "text": content_item})
+                elif isinstance(content_item, dict) and "type" in content_item:
+                    formatted_content.append(content_item)
+                else:
+                    continue
+            data['messages'].append({"role": item['role'], "content": formatted_content})
+
+    response_text, retry, response_json = '', 0, None
+    while len(response_text) < 2:
+        retry += 1
+        try:
+            response = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, data=json.dumps(data))
+            response_json = response.json()
+        except Exception as e:
+            print(e)
+            time.sleep(wait_time)
+            continue
+
+        if response.status_code != 200:
+            print(response.headers, response.content)
+            time.sleep(wait_time)
+            data['temperature'] = min(data['temperature'] + 0.2, 1.0)
+            continue
+
+        if 'choices' not in response_json:
+            time.sleep(wait_time)
+            continue
+
+        response_text = response_json["choices"][0]["message"]["content"]
+
+    return response_json["choices"][0]["message"]["content"]
+
+
 def llm_init_prompt(user_prompt, img_prompt, idea_transcript, args):
     transcript = [{ "role": "system", "content": [] }, {"role": "user", "content": []}]
     # System prompt
-    transcript[0]["content"].append("You are a helpful assistant.\n\nInstruction: Given a user imagined IDEA of the scene, converting the IDEA into a self-contained sentence prompt that will be used to generate an image.\n")
-    transcript[0]["content"].append("Here are some rules to write good prompts:\n")
-    transcript[0]["content"].append("- Each prompt should consist of a description of the scene followed by modifiers divided by commas.\n- The modifiers should alter the mood, style, lighting, and other aspects of the scene.\n- Multiple modifiers can be used to provide more specific details.\n- When generating prompts, reduce abstract psychological and emotional descriptions.\n- When generating prompts, explain images and unusual entities in IDEA with detailed descriptions of the scene.\n- Do not mention 'given image' in output, use detailed texts to describe the image in IDEA instead.\n- Generate diverse prompts.\n- Each prompt should have no more than 50 words.\n")
+    transcript[0]["content"].append({"type": "text", "text":"You are a helpful assistant.\n\nInstruction: Given a user imagined IDEA of the scene, converting the IDEA into a self-contained sentence prompt that will be used to generate an image.\n"})
+    transcript[0]["content"].append({"type": "text", "text":"Here are some rules to write good prompts:\n"})
+    transcript[0]["content"].append({"type": "text", "text":"- Each prompt should consist of a description of the scene followed by modifiers divided by commas.\n- The modifiers should alter the mood, style, lighting, and other aspects of the scene.\n- Multiple modifiers can be used to provide more specific details.\n- When generating prompts, reduce abstract psychological and emotional descriptions.\n- When generating prompts, explain images and unusual entities in IDEA with detailed descriptions of the scene.\n- Do not mention 'given image' in output, use detailed texts to describe the image in IDEA instead.\n- Generate diverse prompts.\n- Each prompt should have no more than 50 words.\n"})
 
     ## Example & Query prompt
     transcript[-1]["content"] = transcript[-1]["content"] + idea_transcript
-    transcript[-1]["content"].append("Based on the above information, you will write %d detailed prompts exactly about the IDEA follow the rules. Each prompt is wrapped with <START> and <END>.\n"%args.num_prompt)
+    transcript[-1]["content"].append({"type": "text", "text":"Based on the above information, you will write %d detailed prompts exactly about the IDEA follow the rules. Each prompt is wrapped with <START> and <END>.\n"%args.num_prompt})
     response = llm_request(transcript)
     if '<START>' not in response or '<END>' not in response: ## one format retry
         response = llm_request(transcript, temp=0.1)
@@ -94,15 +152,15 @@ def llm_reflection_prompt_selectbest(user_prompt, img_prompt, idea_transcript, l
     num_img = len(listofimages)
     transcript = [{ "role": "system", "content": [] }, {"role": "user", "content": []}]
     # System prompt
-    transcript[0]["content"].append("You are a helpful assistant.\n\nYou are a judge to rank provided images. Below are %d images generated by an AI art generation model, indexed from 0 to %d."%(num_img,num_img-1))
-    transcript[0]["content"].append("From scale 1 to 10, decide how similar each image is to the user imagined IDEA of the scene.")
+    transcript[0]["content"].append({"type": "text", "text":"You are a helpful assistant.\n\nYou are a judge to rank provided images. Below are %d images generated by an AI art generation model, indexed from 0 to %d."%(num_img,num_img-1)})
+    transcript[0]["content"].append({"type": "text", "text":"From scale 1 to 10, decide how similar each image is to the user imagined IDEA of the scene."})
 
     transcript[-1]["content"] = transcript[-1]["content"] + idea_transcript
     for img_i in range(num_img):
         transcript[-1]["content"].append("%d. "%img_i)
         transcript[-1]["content"].append(load_img(listofimages[img_i]))
 
-    transcript[-1]["content"].append("Let's think step by step. Check all aspects to see how well these images strictly follow the content in IDEA, including having correct object counts, attributes, entities, relationships, sizes, appearance, and all other descriptions in the IDEA. Then give a score for each input images. Finally, consider the scores and select the image with the best overall quality with image index 0 to %d wrapped with <START> and <END>. Only wrap single image index digits between <START> and <END>."%(num_img-1))
+    transcript[-1]["content"].append({"type": "text", "text":"Let's think step by step. Check all aspects to see how well these images strictly follow the content in IDEA, including having correct object counts, attributes, entities, relationships, sizes, appearance, and all other descriptions in the IDEA. Then give a score for each input images. Finally, consider the scores and select the image with the best overall quality with image index 0 to %d wrapped with <START> and <END>. Only wrap single image index digits between <START> and <END>."%(num_img-1)})
 
     response = llm_request(transcript)
     if '<START>' not in response or '<END>' not in response: ## one format retry
@@ -119,21 +177,21 @@ def llm_reflection_prompt_textreflection(user_prompt, img_prompt, idea_transcrip
     current_round = len(image_history)
     transcript = [{ "role": "system", "content": [] }, {"role": "user", "content": []}]
     # System prompt
-    transcript[0]["content"].append("You are a helpful assistant.\n\nYou are iteratively refining the sentence prompt by analyzing the images produced by an AI art generation model, seeking to find out the differences between the user imagined IDEA of the scene and the actual output.\n")
-    transcript[0]["content"].append("If the generated image is not perfect, provide key REASON on ways to improve the image and sentence prompt to better follow the user imagined IDEA of the scene. Here are some rules to write good key REASON:\n")
-    transcript[0]["content"].append("- Carefully compare the current image with the IDEA to strictly follow the details described in the IDEA, including object counts, attributes, entities, relationships, sizes, and appearance. Write down what is different in detail.\n- Avoid hallucinating information or asks that is not mentioned in IDEA.\n- Explain images and unusual entities in IDEA with detailed text descriptions of the scene.\n- Explain how to modify prompts to address the given reflection reason.\n- Focus on one thing to improve in each REASON. \n- Avoid generating REASON identical with the REASON in previous rounds.\n")
+    transcript[0]["content"].append({"type": "text", "text":"You are a helpful assistant.\n\nYou are iteratively refining the sentence prompt by analyzing the images produced by an AI art generation model, seeking to find out the differences between the user imagined IDEA of the scene and the actual output.\n"})
+    transcript[0]["content"].append({"type": "text", "text":"If the generated image is not perfect, provide key REASON on ways to improve the image and sentence prompt to better follow the user imagined IDEA of the scene. Here are some rules to write good key REASON:\n"})
+    transcript[0]["content"].append({"type": "text", "text":"- Carefully compare the current image with the IDEA to strictly follow the details described in the IDEA, including object counts, attributes, entities, relationships, sizes, and appearance. Write down what is different in detail.\n- Avoid hallucinating information or asks that is not mentioned in IDEA.\n- Explain images and unusual entities in IDEA with detailed text descriptions of the scene.\n- Explain how to modify prompts to address the given reflection reason.\n- Focus on one thing to improve in each REASON. \n- Avoid generating REASON identical with the REASON in previous rounds.\n"})
     transcript[-1]["content"] = transcript[-1]["content"] + idea_transcript
-    transcript[-1]["content"].append("This is the round %d of the iteration.\n")
+    transcript[-1]["content"].append({"type": "text", "text":"This is the round %d of the iteration.\n"})
     if current_round!=1:
-        transcript[-1]["content"].append("The iteration history are:\n")
+        transcript[-1]["content"].append({"type": "text", "text":"The iteration history are:\n"})
         for rounds in range(0,len(image_history)-1):
-            transcript[-1]["content"].append("Round %d:\nGenerated sentence prompt: %s\nCorresponding image generated by the AI art generation model:"%(rounds+1,prompt_history[rounds]))
+            transcript[-1]["content"].append({"type": "text", "text":"Round %d:\nGenerated sentence prompt: %s\nCorresponding image generated by the AI art generation model:"%(rounds+1,prompt_history[rounds])})
             transcript[-1]["content"].append(load_img(image_history[rounds]))
-            transcript[-1]["content"].append("However, %s."%(reflection_history[rounds]))
-    transcript[-1]["content"].append("Generated sentence prompt for current round %d is: %s\nCorresponding image generated by the AI art generation model:"%(current_round,prompt_history[-1]))
+            transcript[-1]["content"].append({"type": "text", "text":"However, %s."%(reflection_history[rounds])})
+    transcript[-1]["content"].append({"type": "text", "text":"Generated sentence prompt for current round %d is: %s\nCorresponding image generated by the AI art generation model:"%(current_round,prompt_history[-1])})
     transcript[-1]["content"].append(load_img(image_history[-1]))
 
-    transcript[-1]["content"].append("Based on the above information, you will write REASON that is wrapped with <START> and <END>.\n REASON: ")
+    transcript[-1]["content"].append({"type": "text", "text":"Based on the above information, you will write REASON that is wrapped with <START> and <END>.\n REASON: "})
 
     response = llm_request(transcript)
     if '<START>' not in response or '<END>' not in response: ## one format retry
@@ -151,24 +209,24 @@ def llm_revision_prompt(user_prompt, img_prompt, idea_transcript, image_history,
     current_round = len(image_history)
     transcript = [{ "role": "system", "content": [] }, {"role": "user", "content": []}]
     # System prompt
-    transcript[0]["content"].append("You are a helpful assistant.\n\nInstruction: Given a user imagined IDEA of the scene, converting the IDEA into a sentence prompt that will be used to generate an image.\n")
-    transcript[0]["content"].append("Here are some rules to write good prompts:\n")
-    transcript[0]["content"].append("- Each prompt should consist of a description of the scene followed by modifiers divided by commas.\n- The modifiers should alter the mood, style, lighting, spatial details, and other aspects of the scene.\n- Multiple modifiers can be used to provide more specific details.\n- When generating prompts, reduce abstract psychological and emotional descriptions.\n- When generating prompts, explain images and unusual entities in IDEA with detailed descriptions of the scene.\n- Do not mention 'given image' in output, use detailed texts to describe the image in IDEA.\n- Generate diverse prompts.\n- Output prompt should have less than 50 words.\n")
+    transcript[0]["content"].append({"type": "text", "text":"You are a helpful assistant.\n\nInstruction: Given a user imagined IDEA of the scene, converting the IDEA into a sentence prompt that will be used to generate an image.\n"})
+    transcript[0]["content"].append({"type": "text", "text":"Here are some rules to write good prompts:\n"})
+    transcript[0]["content"].append({"type": "text", "text":"- Each prompt should consist of a description of the scene followed by modifiers divided by commas.\n- The modifiers should alter the mood, style, lighting, spatial details, and other aspects of the scene.\n- Multiple modifiers can be used to provide more specific details.\n- When generating prompts, reduce abstract psychological and emotional descriptions.\n- When generating prompts, explain images and unusual entities in IDEA with detailed descriptions of the scene.\n- Do not mention 'given image' in output, use detailed texts to describe the image in IDEA.\n- Generate diverse prompts.\n- Output prompt should have less than 50 words.\n"})
     ## Example & Query prompt
     transcript[-1]["content"] = transcript[-1]["content"] + idea_transcript
-    transcript[-1]["content"].append("You are iteratively improving the sentence prompt by looking at the images generated by an AI art generation model and find out what is different from the given IDEA.\n")
-    transcript[-1]["content"].append("This is the round %d of the iteration.\n"%current_round)
+    transcript[-1]["content"].append({"type": "text", "text":"You are iteratively improving the sentence prompt by looking at the images generated by an AI art generation model and find out what is different from the given IDEA.\n"})
+    transcript[-1]["content"].append({"type": "text", "text":"This is the round %d of the iteration.\n"%current_round})
     if current_round!=1:
-        transcript[-1]["content"].append("The iteration history are:\n")
+        transcript[-1]["content"].append({"type": "text", "text":"The iteration history are:\n"})
         for rounds in range(0,len(image_history)-1):
-            transcript[-1]["content"].append("Round %d:\nGenerated sentence prompt: %s\nCorresponding image generated by the AI art generation model:"%(rounds+1,prompt_history[rounds]))
+            transcript[-1]["content"].append({"type": "text", "text":"Round %d:\nGenerated sentence prompt: %s\nCorresponding image generated by the AI art generation model:"%(rounds+1,prompt_history[rounds])})
             transcript[-1]["content"].append(load_img(image_history[rounds]))
-            transcript[-1]["content"].append("However, %s."%(reflection_history[rounds]))
-    transcript[-1]["content"].append("Generated sentence prompt for current round %d is: %s\nCorresponding image generated by the AI art generation model:"%(current_round,prompt_history[-1]))
+            transcript[-1]["content"].append({"type": "text", "text":"However, %s."%(reflection_history[rounds])})
+    transcript[-1]["content"].append({"type": "text", "text":"Generated sentence prompt for current round %d is: %s\nCorresponding image generated by the AI art generation model:"%(current_round,prompt_history[-1])})
     transcript[-1]["content"].append(load_img(image_history[-1]))
-    transcript[-1]["content"].append("However, %s."%(reflection_history[-1]))
+    transcript[-1]["content"].append({"type": "text", "text":"However, %s."%(reflection_history[-1])})
 
-    transcript[-1]["content"].append("Based on the above information, to improve the image, you will write %d detailed prompts exactly about the IDEA follow the rules. Make description of the scene more detailed and add modifiers to address the given key reasons to improve the image. Avoid generating prompts identical with the ones in previous rounds. Each prompt is wrapped with <START> and <END>.\n"%args.num_prompt)
+    transcript[-1]["content"].append({"type": "text", "text":"Based on the above information, to improve the image, you will write %d detailed prompts exactly about the IDEA follow the rules. Make description of the scene more detailed and add modifiers to address the given key reasons to improve the image. Avoid generating prompts identical with the ones in previous rounds. Each prompt is wrapped with <START> and <END>.\n"%args.num_prompt})
     response = llm_request(transcript)
     if '<START>' not in response or '<END>' not in response: ## one format retry
         response = llm_request(transcript, temp=0.1)

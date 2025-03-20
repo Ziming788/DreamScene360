@@ -5,7 +5,7 @@ from torchvision.transforms import Compose
 from torchvision import transforms
 
 
-model =  torch.hub.load('facebookresearch/dinov2', 'dinov2_vitb14').cuda()
+model =  torch.hub.load('facebookresearch/dinov2', 'dinov2_vitb14', force_reload=True).cuda()
 
 def get_Feature_from_DinoV2(tensor, model = model):
     transform = Compose([
